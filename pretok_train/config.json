@@ -1,0 +1,257 @@
+{
+    "shard_count": 50,
+    "shard_size": 20000,
+    "total_tokens": 235250552,
+    "shards": [
+        {
+            "shard_id": 0,
+            "shard_file": "shard_0.npy",
+            "token_count": 4675299
+        },
+        {
+            "shard_id": 1,
+            "shard_file": "shard_1.npy",
+            "token_count": 4710360
+        },
+        {
+            "shard_id": 2,
+            "shard_file": "shard_2.npy",
+            "token_count": 4568374
+        },
+        {
+            "shard_id": 3,
+            "shard_file": "shard_3.npy",
+            "token_count": 4577533
+        },
+        {
+            "shard_id": 4,
+            "shard_file": "shard_4.npy",
+            "token_count": 4476669
+        },
+        {
+            "shard_id": 5,
+            "shard_file": "shard_5.npy",
+            "token_count": 4785268
+        },
+        {
+            "shard_id": 6,
+            "shard_file": "shard_6.npy",
+            "token_count": 4792444
+        },
+        {
+            "shard_id": 7,
+            "shard_file": "shard_7.npy",
+            "token_count": 4877613
+        },
+        {
+            "shard_id": 8,
+            "shard_file": "shard_8.npy",
+            "token_count": 4862177
+        },
+        {
+            "shard_id": 9,
+            "shard_file": "shard_9.npy",
+            "token_count": 4778074
+        },
+        {
+            "shard_id": 10,
+            "shard_file": "shard_10.npy",
+            "token_count": 4724528
+        },
+        {
+            "shard_id": 11,
+            "shard_file": "shard_11.npy",
+            "token_count": 4852831
+        },
+        {
+            "shard_id": 12,
+            "shard_file": "shard_12.npy",
+            "token_count": 4825406
+        },
+        {
+            "shard_id": 13,
+            "shard_file": "shard_13.npy",
+            "token_count": 4694489
+        },
+        {
+            "shard_id": 14,
+            "shard_file": "shard_14.npy",
+            "token_count": 4711813
+        },
+        {
+            "shard_id": 15,
+            "shard_file": "shard_15.npy",
+            "token_count": 4595565
+        },
+        {
+            "shard_id": 16,
+            "shard_file": "shard_16.npy",
+            "token_count": 4675977
+        },
+        {
+            "shard_id": 17,
+            "shard_file": "shard_17.npy",
+            "token_count": 4740251
+        },
+        {
+            "shard_id": 18,
+            "shard_file": "shard_18.npy",
+            "token_count": 4475849
+        },
+        {
+            "shard_id": 19,
+            "shard_file": "shard_19.npy",
+            "token_count": 4765334
+        },
+        {
+            "shard_id": 20,
+            "shard_file": "shard_20.npy",
+            "token_count": 4694452
+        },
+        {
+            "shard_id": 21,
+            "shard_file": "shard_21.npy",
+            "token_count": 4537252
+        },
+        {
+            "shard_id": 22,
+            "shard_file": "shard_22.npy",
+            "token_count": 4768497
+        },
+        {
+            "shard_id": 23,
+            "shard_file": "shard_23.npy",
+            "token_count": 4872826
+        },
+        {
+            "shard_id": 24,
+            "shard_file": "shard_24.npy",
+            "token_count": 4638159
+        },
+        {
+            "shard_id": 25,
+            "shard_file": "shard_25.npy",
+            "token_count": 4620527
+        },
+        {
+            "shard_id": 26,
+            "shard_file": "shard_26.npy",
+            "token_count": 4761998
+        },
+        {
+            "shard_id": 27,
+            "shard_file": "shard_27.npy",
+            "token_count": 4748852
+        },
+        {
+            "shard_id": 28,
+            "shard_file": "shard_28.npy",
+            "token_count": 4740145
+        },
+        {
+            "shard_id": 29,
+            "shard_file": "shard_29.npy",
+            "token_count": 4540868
+        },
+        {
+            "shard_id": 30,
+            "shard_file": "shard_30.npy",
+            "token_count": 4602399
+        },
+        {
+            "shard_id": 31,
+            "shard_file": "shard_31.npy",
+            "token_count": 4814478
+        },
+        {
+            "shard_id": 32,
+            "shard_file": "shard_32.npy",
+            "token_count": 4751511
+        },
+        {
+            "shard_id": 33,
+            "shard_file": "shard_33.npy",
+            "token_count": 4777602
+        },
+        {
+            "shard_id": 34,
+            "shard_file": "shard_34.npy",
+            "token_count": 5042877
+        },
+        {
+            "shard_id": 35,
+            "shard_file": "shard_35.npy",
+            "token_count": 4681191
+        },
+        {
+            "shard_id": 36,
+            "shard_file": "shard_36.npy",
+            "token_count": 4948942
+        },
+        {
+            "shard_id": 37,
+            "shard_file": "shard_37.npy",
+            "token_count": 4732202
+        },
+        {
+            "shard_id": 38,
+            "shard_file": "shard_38.npy",
+            "token_count": 4597085
+        },
+        {
+            "shard_id": 39,
+            "shard_file": "shard_39.npy",
+            "token_count": 4756203
+        },
+        {
+            "shard_id": 40,
+            "shard_file": "shard_40.npy",
+            "token_count": 4444570
+        },
+        {
+            "shard_id": 41,
+            "shard_file": "shard_41.npy",
+            "token_count": 4539605
+        },
+        {
+            "shard_id": 42,
+            "shard_file": "shard_42.npy",
+            "token_count": 4596869
+        },
+        {
+            "shard_id": 43,
+            "shard_file": "shard_43.npy",
+            "token_count": 4468790
+        },
+        {
+            "shard_id": 44,
+            "shard_file": "shard_44.npy",
+            "token_count": 4858447
+        },
+        {
+            "shard_id": 45,
+            "shard_file": "shard_45.npy",
+            "token_count": 4741070
+        },
+        {
+            "shard_id": 46,
+            "shard_file": "shard_46.npy",
+            "token_count": 4780840
+        },
+        {
+            "shard_id": 47,
+            "shard_file": "shard_47.npy",
+            "token_count": 4528656
+        },
+        {
+            "shard_id": 48,
+            "shard_file": "shard_48.npy",
+            "token_count": 4768521
+        },
+        {
+            "shard_id": 49,
+            "shard_file": "shard_49.npy",
+            "token_count": 4729264
+        }
+    ]
+}

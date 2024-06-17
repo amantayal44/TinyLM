@@ -1,0 +1,12 @@
+{
+    "shard_count": 1,
+    "shard_size": 20000,
+    "total_tokens": 4506811,
+    "shards": [
+        {
+            "shard_id": 0,
+            "shard_file": "shard_0.npy",
+            "token_count": 4506811
+        }
+    ]
+}
