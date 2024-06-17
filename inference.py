@@ -1,3 +1,4 @@
+import torch.ao.quantization
 import torch.nn as nn
 import torch
 import sentencepiece as spm
@@ -55,18 +56,29 @@ if __name__ == '__main__':
     parser.add_argument('--num_samples', type=int, default=3, help='Number of samples to generate')
     parser.add_argument('--top_k', type=int, default=10, help='Top k sampling for generation')
     parser.add_argument('--temp', type=float, default=1.0, help='Temperature for sampling')
+    parser.add_argument('--quantize', action='store_true', default=True, help='Quantize the model')
     args = parser.parse_args()
 
-    device = utils.get_device()
-    print(f'Using torch device: {device}')
+    if args.quantize:
+        torch.backends.quantized.engine = 'qnnpack'
+        device = 'cpu'
+    else:
+        device = utils.get_device()
 
     # Load the model
     config = torch.load(args.config)
     if isinstance(config, gpt_model.GPTConfig):
-        model = gpt_model.GPT(config).to(device)
-        torch.compile(model)
-        model.load_state_dict(torch.load(args.model)) 
+        base_model = gpt_model.GPT(config).to(device)
+        base_model.load_state_dict(torch.load(args.model))
         print(f'Model loaded from {args.model} with config {config}')
+
+        if args.quantize:
+            model = torch.ao.quantization.quantize_dynamic(base_model, {nn.Linear}, dtype=torch.qint8)
+            print('Model quantized successfully.')
+        else:
+            model = base_model
+
+        torch.compile(model)
     else:
         raise ValueError('Invalid model config')
 
