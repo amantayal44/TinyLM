@@ -176,3 +176,6 @@ output*/
 
 # wandb files
 wandb/
+
+# ds store files
+.DS_Store
