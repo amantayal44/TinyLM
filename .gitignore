@@ -175,6 +175,7 @@ rough.ipynb
 
 # output files
 output*/
+gpt_output*/
 
 # wandb files
 wandb/

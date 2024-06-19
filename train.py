@@ -12,21 +12,18 @@ import wandb
 import math
 import json
 
-
-def val_loss(model, data_loader):
+@torch.no_grad()
+def val_loss(model: gpt_model.GPT, data_loader: dataloader.DataLoader):
     model.eval()
     total_loss = 0
     for _, x, y in data_loader:
-        x, y = x.to(device), y.to(device)
-        with torch.no_grad():
-            _, loss = model(x, y)
+        _, loss = model(x, y)
         total_loss += loss.item()
     total_loss /= data_loader.max_steps
     return total_loss
 
 class CosineScheduler:
     def __init__(self, optimizer, lr_max, lr_min, warmup_steps, total_steps):
-        print(f'CosineScheduler created with lr_max: {lr_max}, lr_min: {lr_min}, warmup_steps: {warmup_steps}, total_steps: {total_steps}')
         self.optimizer = optimizer
         self.lr_max = lr_max
         self.warmup_steps = warmup_steps
@@ -67,26 +64,31 @@ if __name__ == '__main__':
     parser.add_argument('--block_size', type=int, default=256, help='Block size for the model')
     parser.add_argument('--n_layer', type=int, default=6, help='Number of layers in the model')
     parser.add_argument('--n_dim', type=int, default=256, help='Embedding dimension for the model')
-    parser.add_argument('--max_train_steps', type=int, default=-1, help='Maximum training steps, set to -1 for full training')
-    parser.add_argument('--max_val_steps', type=int, default=-1, help='Maximum validation steps, set to -1 for full validation. For validation batch size is doubled.')
-    parser.add_argument('--val_loss_steps', type=int, default=10, help='Calculate validation loss after every val_loss_steps steps')
+    parser.add_argument('--grad_accum_steps', type=int, default=1, help='Number of steps to accumulate gradients over')
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training, if grad_accum_steps > 1, this is micro batch size')
+    parser.add_argument('--max_train_steps', type=int, default=-1, help='Maximum training steps, set to -1 for 1 epoch, if grad_accum_steps > 1, this is steps per micro batch')
+    parser.add_argument('--max_val_steps', type=int, default=-1, help='Maximum validation steps, set to -1 for 1 epoch. For validation batch size is doubled.')
+    parser.add_argument('--val_loss_steps', type=int, default=10, help='Calculate validation loss after every val_loss_steps grad accum steps')
     parser.add_argument('--save_steps', type=int, default=1, help='Save model after every save_steps validation steps')
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training')
     parser.add_argument('--lr', type=float, default=1e-3, help='Max learning rate for training')
+    parser.add_argument('--warmup_steps', type=int, default=500, help='Number of warmup steps for learning rate scheduler')
     parser.add_argument('--wandb', action='store_true', default=False, help='Use wandb for logging')
     args = parser.parse_args()
 
-    device = 'cpu'
-    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        device = 'mps'
-    print(f'Using torch device: {device}')
+    device = utils.get_device()
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
 
-    # Create data loader
-    train_loader = dataloader.DataLoader(f'{args.tokenizer_dir}/pretok_train', batch_size=args.batch_size, max_seq_len=args.block_size, max_steps=args.max_train_steps if args.max_train_steps != -1 else None)
-    val_loader = dataloader.DataLoader(f'{args.tokenizer_dir}/pretok_valid', batch_size=args.batch_size * 2, max_seq_len=args.block_size, max_steps=args.max_val_steps if args.max_val_steps != -1 else None)
+    # Calculate total training steps
+    train_steps_per_epoch = dataloader.possible_max_steps_in_dir(f'{args.tokenizer_dir}/pretok_train', args.batch_size, args.block_size)
+    max_train_steps = args.max_train_steps if args.max_train_steps != -1 else train_steps_per_epoch
+    max_grad_steps = max_train_steps // args.grad_accum_steps
+    max_train_steps = max_grad_steps * args.grad_accum_steps
+
+    # Create data loaders
+    train_loader = dataloader.DataLoader(f'{args.tokenizer_dir}/pretok_train', batch_size=args.batch_size, max_seq_len=args.block_size, device=device, max_steps=max_train_steps)
+    val_loader = dataloader.DataLoader(f'{args.tokenizer_dir}/pretok_valid', batch_size=args.batch_size * 2, max_seq_len=args.block_size, device=device, max_steps=args.max_val_steps if args.max_val_steps != -1 else None)
     max_train_steps = train_loader.max_steps
     print(f'Train data loaded with max steps: {max_train_steps}')
     print(f'Val data loaded with max steps: {val_loader.max_steps}')
@@ -100,67 +102,96 @@ if __name__ == '__main__':
     print(f'Model created with configs: {model_config}')
     print(f'Model parameters count: {utils.count_parameters(model)}')
 
-    # Create optimizer
+    # Create optimizer and scheduler
     optimizer = model.configure_optimizers(lr=args.lr, weight_decay=0.1)
-    warmup_steps = min(500, max_train_steps // 10)
-    scheduler = CosineScheduler(optimizer, lr_max=args.lr, lr_min=0.1*args.lr, warmup_steps=warmup_steps, total_steps=max_train_steps)
-    print(f'Optimizer created with lr: {args.lr}, warmup_steps: {warmup_steps}')
+    warmup_steps = min(500, max_grad_steps // 10) # minumum of 500 steps or 10% of total grad steps
+    scheduler = CosineScheduler(optimizer, lr_max=args.lr, lr_min=0.1*args.lr, warmup_steps=warmup_steps, total_steps=max_grad_steps)
+    print(f'Optimizer created with scheduler: cosine(warmup steps: {warmup_steps}, total steps: {max_grad_steps}, max lr: {args.lr}, min lr: {0.1*args.lr}) and weight decay: 0.1')
 
     # Data for plotting graphs
     train_losses = []
     val_losses = []
     
+    # Checkpointing
     chkpt_list = []
-
     best_saved_model, best_saved_model_loss = None, 10000
 
     if args.wandb:
      wandb.init(project='TinyLM')
 
-    print(f'Starting training... for {max_train_steps} steps.')
-    total_start = time.time()
-    for step, x, y in train_loader:
+    print(f'Starting training... for {max_grad_steps} steps.')
+    overall_T = time.time()
+    step_T = time.time()
+    plot_T = time.time()
+    val_step = 0
+    
+    train_loader_iter = iter(train_loader)
+    micro_step, x, y = next(train_loader_iter)
+
+    while micro_step < train_loader.max_steps:
+        curr_micro_step = micro_step
 
         # Training step
-        start = time.time()
         model.train()
-        optimizer.zero_grad()
-        x, y = x.to(device), y.to(device)
         _, loss = model(x, y)
-        loss.backward()
-        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        lr = scheduler(step)
-        optimizer.step()
-        print(f'Step {step + 1}/{max_train_steps}, Loss: {loss.item():.6f}, Norm: {norm:.4f}, Learning Rate: {lr:.4e} Time taken: {time.time() - start:.2f} sec, Total time: {time.time() - total_start:.2f} sec, ETA: {(time.time() - total_start) * (max_train_steps - step) / (step + 1):.2f} sec')
-        train_losses.append({'step': step, 'loss': loss.item(), 'norm': norm, 'lr': lr})
-        if args.wandb:
-            wandb.log({'loss/train': loss.item(), 'step': step, 'norm': norm})
-
-        # Validation step
-        if step % args.val_loss_steps == 0 or step == max_train_steps - 1:
-            start = time.time()
-            val_loss_ = val_loss(model, val_loader)
-            print(f'===> Step {step+1}, Val Loss: {val_loss_:.4f}, Time taken: {time.time() - start:.4f} sec')
-            val_losses.append({'step': step, 'loss': val_loss_})
-            if args.wandb:
-                wandb.log({'loss/val': val_loss_, 'step': step})
-
-            if (step // args.val_loss_steps + 1) % args.save_steps == 0 or step == max_train_steps - 1:
-                torch.save(model.state_dict(), os.path.join(args.output_dir, f'model_state_{step}.pt'))
-                chkpt_list.append({'model': f'model_state_{step}.pt', 'loss': val_loss_})
-                print(f'===> Model saved at step {step+1}')
-                if val_loss_ < best_saved_model_loss:
-                    best_saved_model_loss = val_loss_
-                    best_saved_model = f'model_state_{step}.pt'
-            
+        loss = loss / args.grad_accum_steps # Normalize the loss for gradient accumulation
         
-        if step % 10 == 0:
-            # Save new plot after every validation step
-            plot_graph(train_losses, val_losses, args.output_dir)
-            print(f'===> Updated loss plot saved at step {step+1}')
+        # Immediate load next batch asynchrounously
+        if curr_micro_step + 1 < train_loader.max_steps:
+            micro_step, x, y = next(train_loader_iter)
+        else:
+            micro_step = train_loader.max_steps
+        
+        loss.backward()
 
-            all_losses = {'train': train_losses, 'val': val_losses}
-            torch.save(all_losses, os.path.join(args.output_dir, 'all_losses.pt'))
+        # Gradient accumulation
+        if (curr_micro_step + 1) % args.grad_accum_steps == 0:
+            norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            lr = scheduler(curr_micro_step // args.grad_accum_steps)
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            # Logging training step
+            overall_D, step_D = time.time() - overall_T, time.time() - step_T
+            loss_value = loss.item() * args.grad_accum_steps
+            grad_step = curr_micro_step // args.grad_accum_steps
+            print(f'Step {grad_step}/{max_grad_steps}, Loss: {loss_value:.6f}, Norm: {norm:.4f}, Learning Rate: {lr:.4e} Time taken: {step_D:.2f} sec, Total time: {overall_D:.2f} sec')
+            train_losses.append({'step': grad_step, 'loss': loss_value, 'norm': norm, 'lr': lr, 'time': step_D})
+            if args.wandb:
+                wandb.log({'loss/train': loss_value, 'step': grad_step, 'norm': norm, 'lr': lr, 'time': step_D})
+
+            # Calculate validation loss
+            if (grad_step + 1) % args.val_loss_steps == 0 or grad_step == max_grad_steps - 1:
+                val_T = time.time()
+                val_loss_ = val_loss(model, val_loader)
+                val_D = time.time() - val_T
+
+                # Logging validation loss
+                print(f'Validation Loss: {val_loss_:.4f}, Time taken: {val_D:.4f} sec')
+                val_losses.append({'step': grad_step, 'loss': val_loss_, 'time': val_D})
+                if args.wandb:
+                    wandb.log({'loss/val': val_loss_, 'step': grad_step})
+
+                if val_step % args.save_steps == 0 or grad_step == max_grad_steps - 1:
+                    torch.save(model.state_dict(), os.path.join(args.output_dir, f'model_state_{grad_step}.pt'))
+                    chkpt_list.append({'model': f'model_state_{grad_step}.pt', 'loss': val_loss_})
+                    print(f'Model saved at step {grad_step}')
+                    if val_loss_ < best_saved_model_loss:
+                        best_saved_model_loss = val_loss_
+                        best_saved_model = f'model_state_{grad_step}.pt'
+
+                val_step += 1
+            
+            # Update the plot and save losses after every 10s.
+            if time.time() - plot_T > 10 or grad_step == max_grad_steps - 1:
+                print('Plotting graph...')
+                plot_graph(train_losses, val_losses, args.output_dir)
+                all_losses = {'train': train_losses, 'val': val_losses}
+                torch.save(all_losses, os.path.join(args.output_dir, 'all_losses.pt'))
+                plot_T = time.time()
+
+            # Reset step timer
+            step_T = time.time()
 
 
     print(f'Training completed. Best model saved at {best_saved_model} with loss: {best_saved_model_loss:.4f}')
