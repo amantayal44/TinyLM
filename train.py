@@ -60,6 +60,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--output_dir', type=str, default='output', help='Output directory for model, config and logs')
     parser.add_argument('--tokenizer_dir', type=str, help='Directory containing tokenizer model and pretokenized data')
+    parser.add_argument('--checkpoint', type=str, default='', help='Checkpoint to be used for training model, No checkpoint is used if set to "".')
     parser.add_argument('--vocab_size', type=int, default=4096, help='Vocabulary size for the model')
     parser.add_argument('--block_size', type=int, default=256, help='Block size for the model')
     parser.add_argument('--n_layer', type=int, default=6, help='Number of layers in the model')
@@ -69,8 +70,8 @@ if __name__ == '__main__':
     parser.add_argument('--max_train_steps', type=int, default=-1, help='Maximum training steps, set to -1 for 1 epoch, if grad_accum_steps > 1, this is steps per micro batch')
     parser.add_argument('--max_val_steps', type=int, default=-1, help='Maximum validation steps, set to -1 for 1 epoch. For validation batch size is doubled.')
     parser.add_argument('--val_loss_steps', type=int, default=10, help='Calculate validation loss after every val_loss_steps grad accum steps')
-    parser.add_argument('--save_steps', type=int, default=1, help='Save model after every save_steps validation steps')
-    parser.add_argument('--lr', type=float, default=1e-3, help='Max learning rate for training')
+    parser.add_argument('--max_lr', type=float, default=1e-3, help='Max learning rate for training')
+    parser.add_argument('--min_lr', type=float, default=1e-4, help='Min learning rate for training')
     parser.add_argument('--warmup_steps', type=int, default=500, help='Number of warmup steps for learning rate scheduler')
     parser.add_argument('--wandb', action='store_true', default=False, help='Use wandb for logging')
     args = parser.parse_args()
@@ -95,31 +96,39 @@ if __name__ == '__main__':
 
     # Create model
     # TODO: Add support for other model types
-    model_config = gpt_model.GPTConfig(vocab_size=args.vocab_size, block_size=args.block_size, n_layer=args.n_layer, n_dim=args.n_dim)
-    torch.save(model_config, os.path.join(args.output_dir, 'model_config.pt'))
-    model = gpt_model.GPT(model_config).to(device)
+    if args.checkpoint:
+        model_dict = torch.load(args.checkpoint)
+        model_type = model_dict['type']
+        model = gpt_model.GPT(model_dict['config']).to(device)
+        model.load_state_dict(model_dict['state'])
+        print(f'Model loaded from checkpoint {args.checkpoint}')
+    else:
+        model_type = 'GPT'
+        model_config = gpt_model.GPTConfig(vocab_size=args.vocab_size, block_size=args.block_size, n_layer=args.n_layer, n_dim=args.n_dim)
+        model = gpt_model.GPT(model_config).to(device)
+    
     torch.compile(model)
-    print(f'Model created with configs: {model_config}')
+    print(f'Model created with configs: {model.config}')
     print(f'Model parameters count: {utils.count_parameters(model)}')
 
     # Create optimizer and scheduler
-    optimizer = model.configure_optimizers(lr=args.lr, weight_decay=0.1)
-    warmup_steps = min(500, max_grad_steps // 10) # minumum of 500 steps or 10% of total grad steps
-    scheduler = CosineScheduler(optimizer, lr_max=args.lr, lr_min=0.1*args.lr, warmup_steps=warmup_steps, total_steps=max_grad_steps)
-    print(f'Optimizer created with scheduler: cosine(warmup steps: {warmup_steps}, total steps: {max_grad_steps}, max lr: {args.lr}, min lr: {0.1*args.lr}) and weight decay: 0.1')
+    optimizer = model.configure_optimizers(lr=args.min_lr, weight_decay=0.1)
+    warmup_steps = min(args.warmup_steps, max_grad_steps // 10) # minumum of warmput_steps steps or 10% of total grad steps.
+    scheduler = CosineScheduler(optimizer, lr_max=args.max_lr, lr_min=args.min_lr, warmup_steps=warmup_steps, total_steps=max_grad_steps)
+    print(f'Optimizer created with scheduler: cosine(warmup steps: {warmup_steps}, total steps: {max_grad_steps}, max lr: {args.max_lr}, min lr: {args.min_lr}) and weight decay: 0.1')
 
     # Data for plotting graphs
     train_losses = []
     val_losses = []
     
     # Checkpointing
-    chkpt_list = []
-    best_saved_model, best_saved_model_loss = None, 10000
+    best_saved_model_step, best_saved_model_loss = -1, 10000
 
     if args.wandb:
      wandb.init(project='TinyLM')
 
     print(f'Starting training... for {max_grad_steps} steps.')
+
     overall_T = time.time()
     step_T = time.time()
     plot_T = time.time()
@@ -146,45 +155,46 @@ if __name__ == '__main__':
 
         # Gradient accumulation
         if (curr_micro_step + 1) % args.grad_accum_steps == 0:
+            grad_step = curr_micro_step // args.grad_accum_steps
+
             norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            lr = scheduler(curr_micro_step // args.grad_accum_steps)
+            lr = scheduler(grad_step)
             optimizer.step()
             optimizer.zero_grad()
-            
-            # Logging training step
-            overall_D, step_D = time.time() - overall_T, time.time() - step_T
+
             loss_value = loss.item() * args.grad_accum_steps
-            grad_step = curr_micro_step // args.grad_accum_steps
+            overall_D, step_D = time.time() - overall_T, time.time() - step_T
             print(f'Step {grad_step}/{max_grad_steps}, Loss: {loss_value:.6f}, Norm: {norm:.4f}, Learning Rate: {lr:.4e} Time taken: {step_D:.2f} sec, Total time: {overall_D:.2f} sec')
             train_losses.append({'step': grad_step, 'loss': loss_value, 'norm': norm, 'lr': lr, 'time': step_D})
             if args.wandb:
                 wandb.log({'loss/train': loss_value, 'step': grad_step, 'norm': norm, 'lr': lr, 'time': step_D})
 
             # Calculate validation loss
-            if (grad_step + 1) % args.val_loss_steps == 0 or grad_step == max_grad_steps - 1:
+            if grad_step % args.val_loss_steps == 0 or grad_step == max_grad_steps - 1:
                 val_T = time.time()
                 val_loss_ = val_loss(model, val_loader)
                 val_D = time.time() - val_T
 
                 # Logging validation loss
-                print(f'Validation Loss: {val_loss_:.4f}, Time taken: {val_D:.4f} sec')
+                print(f'===> Validation Loss: {val_loss_:.6f}, Time taken: {val_D:.4f} sec')
                 val_losses.append({'step': grad_step, 'loss': val_loss_, 'time': val_D})
                 if args.wandb:
                     wandb.log({'loss/val': val_loss_, 'step': grad_step})
+                
+                model_dict = {'type': model_type, 'config': model.config, 'state': model.state_dict()}
 
-                if val_step % args.save_steps == 0 or grad_step == max_grad_steps - 1:
-                    torch.save(model.state_dict(), os.path.join(args.output_dir, f'model_state_{grad_step}.pt'))
-                    chkpt_list.append({'model': f'model_state_{grad_step}.pt', 'loss': val_loss_})
-                    print(f'Model saved at step {grad_step}')
-                    if val_loss_ < best_saved_model_loss:
-                        best_saved_model_loss = val_loss_
-                        best_saved_model = f'model_state_{grad_step}.pt'
+                # Save latest model
+                torch.save(model_dict, os.path.join(args.output_dir, f'last_model.pt'))
 
-                val_step += 1
+                # Save best model
+                if val_loss_ < best_saved_model_loss:
+                    best_saved_model_loss = val_loss_
+                    best_saved_model_step = grad_step
+                    torch.save(model_dict, os.path.join(args.output_dir, f'best_model.pt'))
+                    print(f'===> Best model saved at step {grad_step} with loss: {val_loss_:.6f}')
             
-            # Update the plot and save losses after every 10s.
-            if time.time() - plot_T > 10 or grad_step == max_grad_steps - 1:
-                print('Plotting graph...')
+            # Update the plot and save losses after every 15s.
+            if time.time() - plot_T > 15 or grad_step == max_grad_steps - 1:
                 plot_graph(train_losses, val_losses, args.output_dir)
                 all_losses = {'train': train_losses, 'val': val_losses}
                 torch.save(all_losses, os.path.join(args.output_dir, 'all_losses.pt'))
@@ -194,15 +204,15 @@ if __name__ == '__main__':
             step_T = time.time()
 
 
-    print(f'Training completed. Best model saved at {best_saved_model} with loss: {best_saved_model_loss:.4f}')
+    print(f'Training completed. Best model saved at {best_saved_model_step} with loss: {best_saved_model_loss:.4f}')
 
     # Store details of the training run
     details = {
         'best_model': {
-            'model': best_saved_model,
+            'model_step': best_saved_model_step,
             'loss': best_saved_model_loss
         },
-        'checkpoints': chkpt_list,
+        'validation loss': [{'step': val_loss['step'], 'loss': val_loss['loss']} for val_loss in val_losses]
     }
     with open(os.path.join(args.output_dir, 'details.json'), 'w') as f:
         json.dump(details, f, indent=4)

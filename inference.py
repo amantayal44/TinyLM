@@ -48,9 +48,8 @@ def inference(model: gpt_model.GPT, tokenizer: spm.SentencePieceProcessor, text:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model', type=str, default='gpt_model_0.pt', help='Path to the model file')
-    parser.add_argument('--config', type=str, default='gpt_config.pt', help='Path to the model config file')
-    parser.add_argument('--tokenizer', type=str, default='tokenizer.model', help='Path to the tokenizer model file')
+    parser.add_argument('--model', type=str, required=True, help='Path to the model file')
+    parser.add_argument('--tokenizer', type=str, required=True, help='Path to the tokenizer model file')
     parser.add_argument('--text', type=str, default='Once upon a time', help='Text to start the generation')
     parser.add_argument('--max_len', type=int, default=100, help='Maximum length of the generated text')
     parser.add_argument('--num_samples', type=int, default=3, help='Number of samples to generate')
@@ -66,11 +65,11 @@ if __name__ == '__main__':
         device = utils.get_device()
 
     # Load the model
-    config = torch.load(args.config)
-    if isinstance(config, gpt_model.GPTConfig):
-        base_model = gpt_model.GPT(config).to(device)
-        base_model.load_state_dict(torch.load(args.model))
-        print(f'Model loaded from {args.model} with config {config}')
+    model_dict = torch.load(args.model)
+    if model_dict['type'] == 'GPT':
+        base_model = gpt_model.GPT(model_dict['config']).to(device)
+        base_model.load_state_dict(model_dict['state'])
+        print(f'Model loaded from {args.model} with config {model_dict["config"]}')
 
         if args.quantize:
             model = torch.ao.quantization.quantize_dynamic(base_model, {nn.Linear}, dtype=torch.qint8)
