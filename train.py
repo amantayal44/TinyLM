@@ -2,6 +2,7 @@ from functools import partial
 import torch
 import dataloader
 import gpt_model
+import llama_model
 from tqdm import tqdm
 import time
 import argparse
@@ -11,6 +12,37 @@ import matplotlib.pyplot as plt
 import wandb
 import math
 import json
+from typing import Union
+
+def load_checkpoint(checkpoint_path, device) -> Union[gpt_model.GPT, llama_model.Llama]:
+    model_dict = torch.load(checkpoint_path)
+    model_type = model_dict['type']
+
+    if model_type == 'GPT':
+        model = gpt_model.GPT(model_dict['config'])
+    elif model_type == 'Llama':
+        model = llama_model.Llama(model_dict['config'])
+    else:
+        raise ValueError(f'Unsupported model type: {model_type}')
+
+    model = model.to(device)
+    model.load_state_dict(model_dict['state'])
+    print(f'Model loaded from checkpoint {checkpoint_path}')
+
+    return model
+
+def cread_model_from_args(args, device) -> Union[gpt_model.GPT, llama_model.Llama]:
+    if args.model_type == 'GPT':
+        config = gpt_model.GPTConfig(vocab_size=args.vocab_size, block_size=args.block_size, n_layer=args.n_layer, n_dim=args.n_dim, n_head=args.n_head)
+        model = gpt_model.GPT(config)
+    elif args.model_type == 'Llama':
+        config = llama_model.LlamaConfig(vocab_size=args.vocab_size, block_size=args.block_size, n_layer=args.n_layer, n_dim=args.n_dim, n_head=args.n_head, n_kv_head=args.n_kv_head)
+        model = llama_model.Llama(config)
+    else:
+        raise ValueError(f'Unsupported model type: {args.model_type}')
+
+    model = model.to(device)
+    return model
 
 @torch.no_grad()
 def val_loss(model: gpt_model.GPT, data_loader: dataloader.DataLoader):
@@ -61,10 +93,13 @@ if __name__ == '__main__':
     parser.add_argument('--output_dir', type=str, default='output', help='Output directory for model, config and logs')
     parser.add_argument('--tokenizer_dir', type=str, help='Directory containing tokenizer model and pretokenized data')
     parser.add_argument('--checkpoint', type=str, default='', help='Checkpoint to be used for training model, No checkpoint is used if set to "".')
+    parser.add_argument('--model_type', type=str, default='GPT', help='Type of model, only supports "GPT" and "Llama"', choices=['GPT', 'Llama'])
     parser.add_argument('--vocab_size', type=int, default=4096, help='Vocabulary size for the model')
     parser.add_argument('--block_size', type=int, default=256, help='Block size for the model')
     parser.add_argument('--n_layer', type=int, default=6, help='Number of layers in the model')
     parser.add_argument('--n_dim', type=int, default=256, help='Embedding dimension for the model')
+    parser.add_argument('--n_head', type=int, default=8, help='Number of attention heads in the model')
+    parser.add_argument('--n_kv_head', type=int, default=8, help='Number of key-value attention heads in the model, Only for Lllama model.')
     parser.add_argument('--grad_accum_steps', type=int, default=1, help='Number of steps to accumulate gradients over')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training, if grad_accum_steps > 1, this is micro batch size')
     parser.add_argument('--max_train_steps', type=int, default=-1, help='Maximum training steps, set to -1 for 1 epoch, if grad_accum_steps > 1, this is steps per micro batch')
@@ -89,24 +124,17 @@ if __name__ == '__main__':
 
     # Create data loaders
     train_loader = dataloader.DataLoader(f'{args.tokenizer_dir}/pretok_train', batch_size=args.batch_size, max_seq_len=args.block_size, device=device, max_steps=max_train_steps)
-    val_loader = dataloader.DataLoader(f'{args.tokenizer_dir}/pretok_valid', batch_size=args.batch_size * 2, max_seq_len=args.block_size, device=device, max_steps=args.max_val_steps if args.max_val_steps != -1 else None)
+    val_loader = dataloader.DataLoader(f'{args.tokenizer_dir}/pretok_valid', batch_size=args.batch_size * 2, max_seq_len=args.block_size, device=device, max_steps=args.max_val_steps * args.grad_accum_steps if args.max_val_steps != -1 else None)
     max_train_steps = train_loader.max_steps
     print(f'Train data loaded with max steps: {max_train_steps}')
     print(f'Val data loaded with max steps: {val_loader.max_steps}')
 
     # Create model
-    # TODO: Add support for other model types
     if args.checkpoint:
-        model_dict = torch.load(args.checkpoint)
-        model_type = model_dict['type']
-        model = gpt_model.GPT(model_dict['config']).to(device)
-        model.load_state_dict(model_dict['state'])
-        print(f'Model loaded from checkpoint {args.checkpoint}')
+        model = load_checkpoint(args.checkpoint, device)
     else:
-        model_type = 'GPT'
-        model_config = gpt_model.GPTConfig(vocab_size=args.vocab_size, block_size=args.block_size, n_layer=args.n_layer, n_dim=args.n_dim)
-        model = gpt_model.GPT(model_config).to(device)
-    
+        model = cread_model_from_args(args, device)
+
     torch.compile(model)
     print(f'Model created with configs: {model.config}')
     print(f'Model parameters count: {utils.count_parameters(model)}')
@@ -170,7 +198,7 @@ if __name__ == '__main__':
                 wandb.log({'loss/train': loss_value, 'step': grad_step, 'norm': norm, 'lr': lr, 'time': step_D})
 
             # Calculate validation loss
-            if grad_step % args.val_loss_steps == 0 or grad_step == max_grad_steps - 1:
+            if args.val_loss_steps > 0 and (grad_step % args.val_loss_steps == 0 or grad_step == max_grad_steps - 1):
                 val_T = time.time()
                 val_loss_ = val_loss(model, val_loader)
                 val_D = time.time() - val_T
@@ -181,7 +209,7 @@ if __name__ == '__main__':
                 if args.wandb:
                     wandb.log({'loss/val': val_loss_, 'step': grad_step})
                 
-                model_dict = {'type': model_type, 'config': model.config, 'state': model.state_dict()}
+                model_dict = {'type': args.model_type, 'config': model.config, 'state': model.state_dict()}
 
                 # Save latest model
                 torch.save(model_dict, os.path.join(args.output_dir, f'last_model.pt'))

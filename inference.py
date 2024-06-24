@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch
 import sentencepiece as spm
 import gpt_model
+import llama_model
 import utils
 from tqdm import tqdm
 import argparse
@@ -70,16 +71,20 @@ if __name__ == '__main__':
         base_model = gpt_model.GPT(model_dict['config']).to(device)
         base_model.load_state_dict(model_dict['state'])
         print(f'Model loaded from {args.model} with config {model_dict["config"]}')
-
-        if args.quantize:
-            model = torch.ao.quantization.quantize_dynamic(base_model, {nn.Linear}, dtype=torch.qint8)
-            print('Model quantized successfully.')
-        else:
-            model = base_model
-
-        torch.compile(model)
+    elif model_dict['type'] == 'Llama':
+        base_model = llama_model.Llama(model_dict['config']).to(device)
+        base_model.load_state_dict(model_dict['state'])
+        print(f'Model loaded from {args.model} with config {model_dict["config"]}')
     else:
         raise ValueError('Invalid model config')
+
+    if args.quantize:
+        model = torch.ao.quantization.quantize_dynamic(base_model, {nn.Linear}, dtype=torch.qint8)
+        print('Model quantized successfully.')
+    else:
+        model = base_model
+
+    torch.compile(model)
 
     # Load tokenizer
     tokenizer = spm.SentencePieceProcessor(model_file=args.tokenizer)

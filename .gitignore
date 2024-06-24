@@ -173,9 +173,10 @@ tokenizer*/
 # rough jupyter notebook
 rough.ipynb
 
-# output files
+# Trained models
 output*/
-gpt_output*/
+GPT_*/
+LLAMA_*/
 
 # wandb files
 wandb/
